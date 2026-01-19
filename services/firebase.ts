@@ -14,14 +14,10 @@ const firebaseConfig = {
   measurementId: "G-WMZZ7TGH3J"
 };
 
-// Inicialização Singleton para evitar erros de múltipla inicialização
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+// Initialize Firebase App
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-/**
- * IMPORTANTE: O erro 'Service database is not available' geralmente ocorre quando
- * o SDK do Firebase não consegue registrar o componente do Realtime Database.
- * Passar a databaseURL explicitamente no getDatabase ajuda a mitigar falhas de descoberta.
- */
+// Get Database instance with explicit URL to avoid resolution issues
 const db = getDatabase(app, firebaseConfig.databaseURL);
 
 export const saveLastImport = async (data: RawSubscriptionRow[]) => {
@@ -31,10 +27,10 @@ export const saveLastImport = async (data: RawSubscriptionRow[]) => {
       timestamp: new Date().toISOString(),
       content: data
     });
-    console.log("Planilha sincronizada globalmente no Firebase.");
+    console.log("Sincronização global concluída com sucesso.");
     return true;
   } catch (error) {
-    console.error("Erro crítico ao salvar no Firebase:", error);
+    console.error("Erro ao salvar no Firebase:", error);
     return false;
   }
 };
@@ -44,11 +40,16 @@ export const loadLastImport = async (): Promise<RawSubscriptionRow[] | null> => 
     const dataRef = ref(db, 'globalLastImport/content');
     const snapshot = await get(dataRef);
     if (snapshot.exists()) {
-      return snapshot.val() as RawSubscriptionRow[];
+      const val = snapshot.val();
+      // Handle cases where Firebase returns an object instead of an array
+      if (val && typeof val === 'object' && !Array.isArray(val)) {
+        return Object.values(val) as RawSubscriptionRow[];
+      }
+      return val as RawSubscriptionRow[];
     }
     return null;
   } catch (error) {
-    console.error("Erro ao ler do Firebase:", error);
-    return null;
+    console.error("Erro ao carregar do Firebase:", error);
+    throw error;
   }
 };

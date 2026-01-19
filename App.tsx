@@ -6,14 +6,14 @@ import {
   Download, 
   Upload, 
   RefreshCw, 
-  Info, 
   BarChart3, 
   TrendingUp,
   AlertCircle,
   ArrowUpRight,
   ArrowDownRight,
   Check,
-  Users
+  Users,
+  DatabaseZap
 } from 'lucide-react';
 import { RawSubscriptionRow, CohortStats } from './types';
 import { processSubscriptionData, formatCohortName } from './services/dataProcessor';
@@ -25,25 +25,25 @@ import { saveLastImport, loadLastImport } from './services/firebase';
 const App: React.FC = () => {
   const [data, setData] = useState<RawSubscriptionRow[]>([]);
   const [stats, setStats] = useState<CohortStats | null>(null);
-  const [isLoading, setIsLoading] = useState(true); // Começa true para checar Firebase
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'abs' | 'perc'>('perc');
   const [aiAnalysis, setAiAnalysis] = useState<string>('');
   const [isAnalysing, setIsAnalysing] = useState(false);
   const [isSynced, setIsSynced] = useState(false);
 
-  // Carregar dados globais ao iniciar (permite que qualquer usuário veja a última planilha)
   useEffect(() => {
     const initApp = async () => {
       try {
         const savedData = await loadLastImport();
-        if (savedData && Array.isArray(savedData)) {
+        if (savedData && Array.isArray(savedData) && savedData.length > 0) {
           setData(savedData);
           setStats(processSubscriptionData(savedData));
           setIsSynced(true);
         }
-      } catch (err) {
-        console.error("Falha na inicialização:", err);
+      } catch (err: any) {
+        console.error("Erro ao carregar base global:", err);
+        setError("Erro de conexão com o banco de dados. Verifique sua internet ou as regras do Firebase.");
       } finally {
         setIsLoading(false);
       }
@@ -63,23 +63,24 @@ const App: React.FC = () => {
     reader.onload = async (evt) => {
       try {
         const bstr = evt.target?.result;
-        if (!bstr) throw new Error("Falha ao ler o conteúdo do arquivo.");
+        if (!bstr) throw new Error("Falha ao ler arquivo.");
         const wb = XLSX.read(bstr, { type: 'binary', cellDates: true });
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
         const jsonData = XLSX.utils.sheet_to_json(ws, { defval: "" });
         
-        if (!jsonData || jsonData.length === 0) throw new Error("Planilha sem dados válidos.");
+        if (!jsonData || jsonData.length === 0) throw new Error("Planilha vazia.");
         
         const rawData = jsonData as RawSubscriptionRow[];
         setData(rawData);
         setStats(processSubscriptionData(rawData));
         
-        // Sincronizar com Firebase para que outros usuários vejam
         const success = await saveLastImport(rawData);
-        if (success) setIsSynced(true);
-        else setError("Dados processados, mas falha na sincronização em nuvem. Verifique as permissões do Firebase.");
-        
+        if (success) {
+          setIsSynced(true);
+        } else {
+          setError("Dados processados localmente, mas falha ao salvar na nuvem.");
+        }
       } catch (err: any) {
         setError(err.message);
       } finally {
@@ -94,13 +95,13 @@ const App: React.FC = () => {
     setIsAnalysing(true);
     try {
       const apiKey = process.env.API_KEY;
-      if (!apiKey) throw new Error("Chave de IA não configurada no ambiente.");
+      if (!apiKey) throw new Error("API Key não encontrada.");
       const ai = new GoogleGenAI({ apiKey });
-      const prompt = `Analise estes cohorts SaaS da AdvEasy. Resuma em 3 pontos: retenção média e tendências recentes. Dados: ${stats.cohorts.slice(-5).map(c => `${c.cohort}: ${c.totalStarters} contratos, Média: ${(c.average*100).toFixed(2)}%`).join(', ')}`;
+      const prompt = `Analise a retenção da AdvEasy. Foque nos últimos 5 cohorts. Dados: ${stats.cohorts.slice(-5).map(c => `${c.cohort}: ${c.totalStarters} contratos, Média: ${(c.average*100).toFixed(2)}%`).join(', ')}`;
       const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: prompt });
-      setAiAnalysis(response.text || "Sem insights disponíveis no momento.");
+      setAiAnalysis(response.text || "Sem insights.");
     } catch (err: any) {
-      setAiAnalysis("Erro na IA: " + err.message);
+      setAiAnalysis("Erro na análise: " + err.message);
     } finally {
       setIsAnalysing(false);
     }
@@ -117,7 +118,7 @@ const App: React.FC = () => {
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-black text-[#0B1E33] uppercase leading-none">Analytics Hub</h1>
               {isSynced && (
-                <div className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded text-[8px] font-black uppercase flex items-center gap-1 border border-emerald-100 shadow-sm">
+                <div className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded text-[8px] font-black uppercase flex items-center gap-1 border border-emerald-100">
                   <Check className="w-3 h-3" /> Base Global Ativa
                 </div>
               )}
@@ -127,7 +128,7 @@ const App: React.FC = () => {
         </div>
         <div className="flex items-center gap-3">
           {stats && (
-            <button onClick={() => generateCohortExcel(data, stats, [])} className="flex items-center gap-2 bg-[#B28A1E] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md hover:brightness-110 transition-all">
+            <button onClick={() => generateCohortExcel(data, stats, [])} className="flex items-center gap-2 bg-[#B28A1E] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md hover:brightness-110">
               <Download className="w-4 h-4" /> Exportar XLSX
             </button>
           )}
@@ -148,16 +149,16 @@ const App: React.FC = () => {
 
         {isLoading ? (
           <div className="h-[60vh] flex flex-col items-center justify-center space-y-4">
-            <div className="w-12 h-12 border-4 border-slate-200 border-t-[#B28A1E] rounded-full animate-spin"></div>
-            <p className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Buscando dados no Firebase...</p>
+            <DatabaseZap className="w-12 h-12 text-[#B28A1E] animate-bounce" />
+            <p className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Conectando à Base Global...</p>
           </div>
         ) : !stats ? (
           <div className="h-[60vh] flex flex-col items-center justify-center bg-white rounded-[2rem] border border-slate-200 text-center shadow-xl border-b-[10px] border-[#0B1E33]">
              <FileSpreadsheet className="w-16 h-16 text-slate-200 mb-6" />
              <h2 className="text-2xl font-black text-[#0B1E33] mb-4 uppercase">Nenhuma Base Encontrada</h2>
-             <p className="text-slate-400 max-w-sm mb-8 font-medium">Não há dados salvos na nuvem. Importe uma planilha para começar o compartilhamento global.</p>
-             <label className="bg-[#0B1E33] text-white px-10 py-4 rounded-2xl font-black text-sm cursor-pointer shadow-xl uppercase tracking-widest hover:brightness-110 active:scale-95 transition-all">
-               Importar Primeira Base
+             <p className="text-slate-400 max-w-sm mb-8 font-medium">Importe uma planilha para que ela fique disponível para todos os usuários da rede.</p>
+             <label className="bg-[#0B1E33] text-white px-10 py-4 rounded-2xl font-black text-sm cursor-pointer shadow-xl uppercase tracking-widest hover:brightness-110">
+               Importar Agora
                <input type="file" className="hidden" onChange={handleFileUpload} />
              </label>
           </div>
@@ -169,12 +170,12 @@ const App: React.FC = () => {
                   <button onClick={() => setViewMode('perc')} className={`px-6 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${viewMode === 'perc' ? 'bg-[#0B1E33] text-white shadow-md' : 'text-slate-500'}`}>Percentual %</button>
                   <button onClick={() => setViewMode('abs')} className={`px-6 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${viewMode === 'abs' ? 'bg-[#0B1E33] text-white shadow-md' : 'text-slate-500'}`}>Absoluto N</button>
                 </div>
-                {isSynced && <div className="hidden md:flex items-center gap-2 text-emerald-600 text-[10px] font-black uppercase">
-                  <Users className="w-4 h-4" /> Visível para todos
-                </div>}
+                <div className="hidden md:flex items-center gap-2 text-emerald-600 text-[10px] font-black uppercase">
+                  <Users className="w-4 h-4" /> Dados Compartilhados em Tempo Real
+                </div>
               </div>
               <button onClick={generateAIInsight} disabled={isAnalysing} className="flex items-center gap-2 text-white font-black text-[10px] px-6 py-3 bg-[#0B1E33] rounded-xl uppercase tracking-widest hover:bg-slate-900 disabled:opacity-50 transition-colors shadow-lg">
-                {isAnalysing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <TrendingUp className="w-4 h-4" />} Insights IA
+                {isAnalysing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <TrendingUp className="w-4 h-4" />} Analisar Retenção
               </button>
             </div>
 
@@ -184,9 +185,9 @@ const App: React.FC = () => {
                   <thead>
                     <tr className="bg-[#0B1E33]">
                       <th className="sticky left-0 z-20 bg-[#0B1E33] p-4 text-left text-[10px] font-black text-white uppercase border-r border-slate-800 shadow-[2px_0_5px_rgba(0,0,0,0.1)] min-w-[120px]">Cohort</th>
-                      <th className="p-4 text-center text-[10px] font-black text-white uppercase border-r border-slate-800">Contratos</th>
+                      <th className="p-4 text-center text-[10px] font-black text-white uppercase border-r border-slate-800">Início</th>
                       {monthsHeader.map(m => <th key={m} className="p-4 text-center text-[10px] font-black text-white uppercase border-r border-slate-800 min-w-[85px]">{m}</th>)}
-                      <th className="p-4 text-center text-[10px] font-black text-[#B28A1E] uppercase bg-slate-900/40 min-w-[100px]">Média</th>
+                      <th className="p-4 text-center text-[10px] font-black text-[#B28A1E] uppercase bg-slate-900/40 min-w-[100px]">Avg Ret.</th>
                       <th className="p-4 text-center text-[10px] font-black text-[#B28A1E] uppercase bg-slate-900/40 min-w-[100px]">Trend</th>
                     </tr>
                   </thead>
@@ -217,7 +218,7 @@ const App: React.FC = () => {
 
             {aiAnalysis && (
               <div className="bg-[#0B1E33] text-white p-8 rounded-[2rem] shadow-xl border-l-[12px] border-[#B28A1E] animate-in slide-in-from-bottom-4 duration-500">
-                <h3 className="font-black text-lg uppercase mb-4 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-[#B28A1E]" /> Diagnóstico de Retenção</h3>
+                <h3 className="font-black text-lg uppercase mb-4 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-[#B28A1E]" /> Diagnóstico de Cohort</h3>
                 <div className="text-sm font-medium text-slate-300 leading-relaxed whitespace-pre-wrap">{aiAnalysis}</div>
               </div>
             )}
@@ -226,12 +227,11 @@ const App: React.FC = () => {
       </main>
 
       <footer className="bg-white border-t border-slate-200 px-6 py-4 flex justify-between items-center text-[10px] font-black text-slate-400 uppercase tracking-widest">
-        <span>AdvEasy Analytics Hub</span>
-        <div className="flex items-center gap-4">
-          <span className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div> Firebase Live</span>
-          <span className="text-slate-200">|</span>
-          <span>v3.0 Stable</span>
+        <div className="flex items-center gap-2">
+          <DatabaseZap className="w-3 h-3 text-emerald-500" />
+          AdvEasy Cloud Sync Active
         </div>
+        <span>v3.1.0 Stable Build</span>
       </footer>
     </div>
   );
