@@ -1,5 +1,5 @@
 
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, set, get } from "firebase/database";
 import { RawSubscriptionRow } from "../types";
 
@@ -14,32 +14,41 @@ const firebaseConfig = {
   measurementId: "G-WMZZ7TGH3J"
 };
 
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
+// Inicialização Singleton para evitar erros de múltipla inicialização
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+
+/**
+ * IMPORTANTE: O erro 'Service database is not available' geralmente ocorre quando
+ * o SDK do Firebase não consegue registrar o componente do Realtime Database.
+ * Passar a databaseURL explicitamente no getDatabase ajuda a mitigar falhas de descoberta.
+ */
+const db = getDatabase(app, firebaseConfig.databaseURL);
 
 export const saveLastImport = async (data: RawSubscriptionRow[]) => {
   try {
-    const dataRef = ref(db, 'lastImport');
+    const dataRef = ref(db, 'globalLastImport');
     await set(dataRef, {
       timestamp: new Date().toISOString(),
       content: data
     });
-    console.log("Dados sincronizados com Firebase.");
+    console.log("Planilha sincronizada globalmente no Firebase.");
+    return true;
   } catch (error) {
-    console.error("Erro ao salvar no Firebase:", error);
+    console.error("Erro crítico ao salvar no Firebase:", error);
+    return false;
   }
 };
 
 export const loadLastImport = async (): Promise<RawSubscriptionRow[] | null> => {
   try {
-    const dataRef = ref(db, 'lastImport/content');
+    const dataRef = ref(db, 'globalLastImport/content');
     const snapshot = await get(dataRef);
     if (snapshot.exists()) {
       return snapshot.val() as RawSubscriptionRow[];
     }
     return null;
   } catch (error) {
-    console.error("Erro ao carregar do Firebase:", error);
+    console.error("Erro ao ler do Firebase:", error);
     return null;
   }
 };
