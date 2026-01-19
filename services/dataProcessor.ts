@@ -24,6 +24,7 @@ export const processSubscriptionData = (data: RawSubscriptionRow[]): CohortStats
     if (!cancelDate) {
       tenureMonths = differenceInCalendarMonths(now, startDate) + 1;
     } else {
+      // Se cancelou no mesmo mês, tenure é 0. Se cancelou no mês seguinte, tenure é 1.
       tenureMonths = differenceInCalendarMonths(cancelDate, startDate);
     }
 
@@ -48,9 +49,10 @@ export const processSubscriptionData = (data: RawSubscriptionRow[]): CohortStats
 
   sortedCohortKeys.forEach((cohortKey, index) => {
     const customers = cohortsMap[cohortKey];
-    const starters = customers.length;
+    const starters = customers.length; // Denominador real (total de contratos adquiridos)
     const cohortStartDate = parse(cohortKey, 'yyyy-MM', new Date());
     
+    // Mês 0: Clientes que não cancelaram no ato (permanência >= 1 mês de faturamento/uso)
     const month0Active = customers.filter(c => c.tenureMonths >= 1).length;
     const retention: number[] = [month0Active];
 
@@ -59,23 +61,19 @@ export const processSubscriptionData = (data: RawSubscriptionRow[]): CohortStats
       retention.push(activeCount);
     }
 
-    // LÓGICA DE MÉDIA CORRIGIDA:
-    // Considerar apenas meses que já ocorreram em relação ao 'now'
+    // LÓGICA DE MÉDIA EXECUTIVA:
     const monthsElapsedSinceStart = differenceInCalendarMonths(now, cohortStartDate);
     
-    // Definimos quantos meses da array de retenção são "reais" (decorridos)
-    // Mês 0 conta como 1, Mês 1 conta como 2, etc.
+    // numRealizedMonths define até onde a linha do tempo já chegou para este cohort
     const numRealizedMonths = Math.max(1, Math.min(monthsElapsedSinceStart + 1, retention.length));
     
-    const base = retention[0];
     const realizedRetention = retention.slice(0, numRealizedMonths);
     
-    // Calculamos a média apenas sobre a fatia de meses que já passaram
+    // A média agora usa 'starters' (Total de Contratos) como base para refletir perdas imediatas
     const average = realizedRetention.length > 0 
-      ? realizedRetention.reduce((acc, v) => acc + (base > 0 ? v / base : 0), 0) / realizedRetention.length 
+      ? realizedRetention.reduce((acc, v) => acc + (starters > 0 ? v / starters : 0), 0) / realizedRetention.length 
       : 0;
 
-    // Growth (Crescimento) é current average - previous average
     let growth = 0;
     if (index > 0) {
       const prevRow = matrix[index - 1];
@@ -100,18 +98,14 @@ export const processSubscriptionData = (data: RawSubscriptionRow[]): CohortStats
 function parseDate(val: any): Date | null {
   if (val instanceof Date) return val;
   if (!val) return null;
-  
   const str = String(val).trim();
   const formats = ['dd/MM/yyyy', 'yyyy-MM-dd', 'MM/dd/yyyy', 'dd/MM/yyyy HH:mm:ss'];
   for (const f of formats) {
     const d = parse(str, f, new Date());
     if (isValid(d)) return d;
   }
-
   const timestamp = Date.parse(str);
-  if (!isNaN(timestamp)) return new Date(timestamp);
-
-  return null;
+  return isNaN(timestamp) ? null : new Date(timestamp);
 }
 
 export const formatCohortName = (key: string): string => {
